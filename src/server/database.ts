@@ -2,6 +2,7 @@ import { chmodSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runMigrations, schemaVersion } from "./database/migrations.ts";
+import type { ExternalGitDirection, ExternalGitRemote } from "./external-git.ts";
 
 export type ProjectMetadata = {
   id: string;
@@ -576,12 +577,101 @@ export class StateDatabase {
   }
 
   getSettings(projectId: string) {
-    const row = this.db.prepare("SELECT compiler, auto_compile FROM project_settings WHERE project_id = ?").get(projectId) as SqlRow | undefined;
-    return { main: this.getBuild(projectId).main, compiler: row?.compiler ? String(row.compiler) : "auto", autoCompile: Boolean(row?.auto_compile) };
+    const row = this.db.prepare("SELECT compiler, auto_compile, scheduled_compile_minutes FROM project_settings WHERE project_id = ?").get(projectId) as SqlRow | undefined;
+    return {
+      main: this.getBuild(projectId).main,
+      compiler: row?.compiler ? String(row.compiler) : "auto",
+      autoCompile: Boolean(row?.auto_compile),
+      scheduledCompileMinutes: Number(row?.scheduled_compile_minutes || 0),
+    };
   }
 
-  saveSettings(projectId: string, settings: { compiler: string; autoCompile: boolean }) {
-    this.db.prepare("INSERT INTO project_settings (project_id, compiler, auto_compile) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET compiler = excluded.compiler, auto_compile = excluded.auto_compile").run(projectId, settings.compiler, settings.autoCompile ? 1 : 0);
+  getScheduledCompileState(projectId: string) {
+    const row = this.db.prepare("SELECT scheduled_compile_minutes, scheduled_compile_last_checked_at, scheduled_compile_last_attempt_revision FROM project_settings WHERE project_id = ?").get(projectId) as SqlRow | undefined;
+    return {
+      minutes: Number(row?.scheduled_compile_minutes || 0),
+      lastCheckedAt: Number(row?.scheduled_compile_last_checked_at || 0),
+      lastAttemptRevision: row?.scheduled_compile_last_attempt_revision === null || row?.scheduled_compile_last_attempt_revision === undefined
+        ? null : String(row.scheduled_compile_last_attempt_revision),
+    };
+  }
+
+  saveSettings(projectId: string, settings: { compiler: string; autoCompile: boolean; scheduledCompileMinutes: number }) {
+    this.db.prepare(`
+      INSERT INTO project_settings (project_id, compiler, auto_compile, scheduled_compile_minutes)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        compiler = excluded.compiler,
+        auto_compile = excluded.auto_compile,
+        scheduled_compile_minutes = excluded.scheduled_compile_minutes,
+        scheduled_compile_last_checked_at = CASE
+          WHEN project_settings.scheduled_compile_minutes != excluded.scheduled_compile_minutes THEN 0
+          ELSE project_settings.scheduled_compile_last_checked_at
+        END,
+        scheduled_compile_last_attempt_revision = CASE
+          WHEN project_settings.scheduled_compile_minutes != excluded.scheduled_compile_minutes THEN NULL
+          ELSE project_settings.scheduled_compile_last_attempt_revision
+        END
+    `).run(projectId, settings.compiler, settings.autoCompile ? 1 : 0, settings.scheduledCompileMinutes);
+  }
+
+  recordScheduledCompileCheck(projectId: string, checkedAt: number) {
+    this.db.prepare("UPDATE project_settings SET scheduled_compile_last_checked_at = ? WHERE project_id = ?").run(checkedAt, projectId);
+  }
+
+  recordScheduledCompileAttempt(projectId: string, checkedAt: number, revision: string) {
+    this.db.prepare("UPDATE project_settings SET scheduled_compile_last_checked_at = ?, scheduled_compile_last_attempt_revision = ? WHERE project_id = ?").run(checkedAt, revision, projectId);
+  }
+
+  getExternalGitRemote(projectId: string): ExternalGitRemote | null {
+    const row = this.db.prepare("SELECT url, branch, direction, sync_minutes, last_checked_at, last_synced_at, last_status, last_error FROM external_git_remotes WHERE project_id = ?").get(projectId) as SqlRow | undefined;
+    if (!row) return null;
+    return {
+      url: String(row.url),
+      branch: String(row.branch),
+      direction: String(row.direction) as ExternalGitDirection,
+      syncMinutes: Number(row.sync_minutes),
+      lastCheckedAt: Number(row.last_checked_at || 0),
+      lastSyncedAt: row.last_synced_at === null || row.last_synced_at === undefined ? null : Number(row.last_synced_at),
+      lastStatus: row.last_status === null || row.last_status === undefined ? null : String(row.last_status),
+      lastError: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+    };
+  }
+
+  saveExternalGitRemote(projectId: string, remote: Pick<ExternalGitRemote, "url" | "branch" | "direction" | "syncMinutes">) {
+    this.db.prepare(`
+      INSERT INTO external_git_remotes (project_id, url, branch, direction, sync_minutes)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        url = excluded.url,
+        branch = excluded.branch,
+        direction = excluded.direction,
+        sync_minutes = excluded.sync_minutes,
+        last_checked_at = 0,
+        last_synced_at = NULL,
+        last_status = NULL,
+        last_error = NULL
+    `).run(projectId, remote.url, remote.branch, remote.direction, remote.syncMinutes);
+    return this.getExternalGitRemote(projectId)!;
+  }
+
+  deleteExternalGitRemote(projectId: string) {
+    this.db.prepare("DELETE FROM external_git_remotes WHERE project_id = ?").run(projectId);
+  }
+
+  recordExternalGitRemoteCheck(projectId: string, checkedAt: number) {
+    this.db.prepare("UPDATE external_git_remotes SET last_checked_at = ? WHERE project_id = ?").run(checkedAt, projectId);
+  }
+
+  recordExternalGitRemoteResult(projectId: string, result: { status: string; error?: string | null; successful: boolean; checkedAt: number }) {
+    this.db.prepare(`
+      UPDATE external_git_remotes SET
+        last_checked_at = ?,
+        last_synced_at = CASE WHEN ? THEN ? ELSE last_synced_at END,
+        last_status = ?,
+        last_error = ?
+      WHERE project_id = ?
+    `).run(result.checkedAt, result.successful ? 1 : 0, result.checkedAt, result.status, result.error || null, projectId);
   }
 
   createTrash(projectId: string, id: string, originalPath: string, directory: boolean, files: Array<{ path: string; content: Uint8Array; snapshot: Uint8Array | null; directory: boolean }>) {

@@ -20,6 +20,8 @@ import type { AutoCheckpoint } from "./auto-checkpoint.ts";
 import { createProjectSearch } from "./search.ts";
 import { CompileQueue } from "./compile-queue.ts";
 import { createCompileService } from "./compile-service.ts";
+import { createScheduledCompileScheduler } from "./scheduled-compile.ts";
+import { createExternalGitSyncScheduler, externalGitTrackingRef } from "./external-git.ts";
 import { checkDependencies } from "./dependencies.ts";
 import { createLogger, requestLogger } from "./logger.ts";
 import { registerAuthRoutes } from "./routes/auth.ts";
@@ -1224,6 +1226,61 @@ export async function createPaperServer(options: ServerOptions = {}): Promise<Pa
   function notifyProjectFiles(projectId: string): void {
     for (const response of projectEvents.get(projectId) || []) response.write("event: files\ndata: {}\n\n");
   }
+  async function syncExternalGitRemote(runtime: ProjectRuntime): Promise<{ status: string; pull: Record<string, unknown> | null; pushed: boolean }> {
+    const remote = database.getExternalGitRemote(runtime.id);
+    if (!remote) throw apiError("external_git_remote_missing", "configure an external Git remote before synchronizing", 409);
+    const checkedAt = Date.now();
+    database.recordExternalGitRemoteCheck(runtime.id, checkedAt);
+    logger.info("external_git_sync.started", { projectId: runtime.id, direction: remote.direction });
+    try {
+      const result = await withGitReader(runtime, () => withGitOperation(runtime, async () => {
+        let pull: Record<string, unknown> | null = null;
+        if (remote.direction !== "push") {
+          const heads = await git(runtime.projectDir, ["ls-remote", "--heads", remote.url, `refs/heads/${remote.branch}`], {
+            env: { GIT_TERMINAL_PROMPT: "0" }, code: "external_git_fetch_failed", status: 502,
+          });
+          if (heads.output) {
+            const trackingRef = externalGitTrackingRef(runtime.id, remote.branch);
+            try {
+              await git(runtime.projectDir, ["fetch", "--no-tags", remote.url, `+refs/heads/${remote.branch}:${trackingRef}`], {
+                env: { GIT_TERMINAL_PROMPT: "0" }, code: "external_git_fetch_failed", status: 502,
+              });
+              pull = await gitSyncLocked(runtime, trackingRef, { id: "external-git", name: "External Git remote" });
+            } finally {
+              await git(runtime.projectDir, ["update-ref", "-d", trackingRef], { allowedCodes: [0, 1] });
+            }
+          } else if (remote.direction === "pull") {
+            throw apiError("external_git_branch_missing", "the configured remote branch does not exist", 409);
+          }
+        }
+
+        let pushed = false;
+        if (remote.direction !== "pull" && pull?.status !== "conflict") {
+          if (!pull) await gitCheckpoint(runtime, "Checkpoint before external Git push");
+          await git(runtime.projectDir, ["push", "--porcelain", remote.url, `refs/heads/main:refs/heads/${remote.branch}`], {
+            env: { GIT_TERMINAL_PROMPT: "0" }, code: "external_git_push_failed", status: 502,
+          });
+          pushed = true;
+        }
+        const status = pull?.status === "conflict" ? "conflict" : (pushed ? "synchronized" : String(pull?.status || "pushed"));
+        return { status, pull, pushed };
+      }));
+      database.recordExternalGitRemoteResult(runtime.id, { status: result.status, successful: true, checkedAt });
+      notifyProjectFiles(runtime.id);
+      logger.info("external_git_sync.finished", { projectId: runtime.id, status: result.status, pushed: result.pushed });
+      return result;
+    } catch (error) {
+      database.recordExternalGitRemoteResult(runtime.id, {
+        status: "failed",
+        error: "Could not synchronize the remote. Check its URL, branch, and non-interactive credentials.",
+        successful: false,
+        checkedAt,
+      });
+      logger.error("external_git_sync.failed", error, { projectId: runtime.id });
+      throw apiError("external_git_sync_failed", "Could not synchronize the remote. Check its URL, branch, and non-interactive credentials.", 502);
+    }
+  }
+
   const streamProjectEvents = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
     try {
       const runtime = await resolveProject(request);
@@ -1317,7 +1374,8 @@ export async function createPaperServer(options: ServerOptions = {}): Promise<Pa
     withGitReader, withTemporaryWorktree,
   });
   registerGitRoutes(app, {
-    gitCheckpoint, gitReceivePack, gitResolve, gitStatus, gitSync, gitUploadPack,
+    allowFileGitRemote: Boolean(options.allowFileGitRemote), database,
+    gitCheckpoint, syncExternalGitRemote, requireProjectOwner, gitReceivePack, gitResolve, gitStatus, gitSync, gitUploadPack,
     json: express.json, notifyProjectFiles, prepareGitPull, raw: express.raw,
     resolveGitProject, resolveGitPushProject, resolveProject, withGitOperation,
     withGitReader, withLiveGitOperation,
@@ -1374,9 +1432,26 @@ export async function createPaperServer(options: ServerOptions = {}): Promise<Pa
   });
 
   const defaultRuntime = defaultProjectId ? await loadProject(defaultProjectId) : null;
+  const scheduledCompilation = createScheduledCompileScheduler({
+    compileProject,
+    database,
+    loadProject,
+    logger,
+    notify: notifyProjectFiles,
+    pollMs: options.scheduledCompilePollMs,
+  });
+  const externalGitSynchronization = createExternalGitSyncScheduler({
+    database,
+    loadProject,
+    logger,
+    syncProject: syncExternalGitRemote,
+    pollMs: options.externalGitPollMs,
+  });
   let closed = false;
   const shutdown = () => {
     if (closed) return;
+    scheduledCompilation.close();
+    externalGitSynchronization.close();
     for (const checkpoint of autoCheckpoints.values()) checkpoint.close();
     for (const listeners of projectEvents.values()) for (const response of listeners) response.end();
     compileQueue.close();

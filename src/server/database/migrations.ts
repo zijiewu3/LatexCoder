@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const LATEST_SCHEMA_VERSION = 15;
+export const LATEST_SCHEMA_VERSION = 17;
 
 type ColumnRow = { name: string };
 type Migration = { version: number; name: string; up(database: DatabaseSync): void };
@@ -308,6 +308,40 @@ const migrations: Migration[] = [
         ) STRICT;
         CREATE INDEX version_labels_project_label_idx
           ON version_labels(project_id, label COLLATE NOCASE, created_at);
+      `);
+    },
+  },
+  {
+    version: 16,
+    name: "scheduled compilation settings",
+    up(database) {
+      if (!hasColumn(database, "project_settings", "scheduled_compile_minutes")) {
+        database.exec("ALTER TABLE project_settings ADD COLUMN scheduled_compile_minutes INTEGER NOT NULL DEFAULT 0 CHECK (scheduled_compile_minutes >= 0 AND scheduled_compile_minutes <= 1440);");
+      }
+      if (!hasColumn(database, "project_settings", "scheduled_compile_last_checked_at")) {
+        database.exec("ALTER TABLE project_settings ADD COLUMN scheduled_compile_last_checked_at INTEGER NOT NULL DEFAULT 0;");
+      }
+      if (!hasColumn(database, "project_settings", "scheduled_compile_last_attempt_revision")) {
+        database.exec("ALTER TABLE project_settings ADD COLUMN scheduled_compile_last_attempt_revision TEXT;");
+      }
+    },
+  },
+  {
+    version: 17,
+    name: "external Git remotes",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS external_git_remotes (
+          project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          url TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          direction TEXT NOT NULL CHECK (direction IN ('pull', 'push', 'both')),
+          sync_minutes INTEGER NOT NULL DEFAULT 0 CHECK (sync_minutes >= 0 AND sync_minutes <= 1440),
+          last_checked_at INTEGER NOT NULL DEFAULT 0,
+          last_synced_at INTEGER,
+          last_status TEXT,
+          last_error TEXT
+        ) STRICT;
       `);
     },
   },

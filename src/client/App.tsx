@@ -356,7 +356,16 @@ export function AppShell() {
           <DialogHeader title="Project settings" closeId="settings-close" />
           <label className="grid gap-1.5 text-sm" htmlFor="settings-main">Main document<select id="settings-main" className="h-9 min-w-0 rounded-md border bg-background px-3" /></label>
           <label className="grid gap-1.5 text-sm" htmlFor="settings-compiler">Compiler<select id="settings-compiler" className="h-9 rounded-md border bg-background px-3"><option value="auto">Automatic</option><option value="tectonic">Tectonic</option><option value="latexmk">latexmk</option></select></label>
-          <label className="flex items-center gap-2 text-sm"><input id="settings-auto" type="checkbox" />Automatic compilation</label>
+          <label className="flex items-center gap-2 text-sm"><input id="settings-auto" type="checkbox" />Compile after edits while this editor is open</label>
+          <label className="grid gap-1.5 text-sm" htmlFor="settings-scheduled-compile">Scheduled compilation interval (minutes)<Input id="settings-scheduled-compile" type="number" min="0" max="1440" step="1" required /><span className="text-xs text-muted-foreground">Use 0 to disable. Changed projects compile at this interval even when no editor is open.</span></label>
+          <section id="external-git-settings" className="space-y-3 border-t pt-4" hidden>
+            <div><strong className="text-sm">External Git remote</strong><p className="mt-1 text-xs text-muted-foreground">Uses this server’s SSH key or Git credential helper. Tokens are never saved here.</p></div>
+            <label className="grid gap-1.5 text-sm" htmlFor="external-git-url">Remote URL<Input id="external-git-url" type="text" placeholder="git@github.com:org/repository.git" autoComplete="off" /></label>
+            <div className="grid grid-cols-2 gap-3"><label className="grid gap-1.5 text-sm" htmlFor="external-git-branch">Branch<Input id="external-git-branch" defaultValue="main" autoComplete="off" /></label><label className="grid gap-1.5 text-sm" htmlFor="external-git-direction">Direction<select id="external-git-direction" className="h-9 rounded-md border bg-background px-3"><option value="both">Pull, then push</option><option value="pull">Pull only</option><option value="push">Push only</option></select></label></div>
+            <label className="grid gap-1.5 text-sm" htmlFor="external-git-interval">Sync interval (minutes)<Input id="external-git-interval" type="number" min="0" max="1440" step="1" defaultValue="0" required /><span className="text-xs text-muted-foreground">Use 0 for manual synchronization only. Remote changes that conflict stay on a conflict branch for review.</span></label>
+            <p id="external-git-status" className="text-xs text-muted-foreground" />
+            <div className="flex flex-wrap gap-2"><Button id="external-git-save" type="button" variant="outline" size="sm">Save remote</Button><Button id="external-git-sync" type="button" variant="outline" size="sm">Sync now</Button><Button id="external-git-disconnect" type="button" variant="ghost" size="sm">Disconnect</Button></div>
+          </section>
           <div className="flex flex-wrap gap-2 border-t pt-4">
             <Button id="open-trash" type="button" variant="outline" size="sm"><Icon name="trash-2" />Recently deleted</Button>
             <Button id="download-project" variant="outline" size="sm" title="Download project ZIP" asChild><a><Icon name="archive" />Download ZIP</a></Button>

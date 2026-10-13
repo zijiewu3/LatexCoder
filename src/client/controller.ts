@@ -4151,6 +4151,35 @@ for (const id of ["projects-about", "editor-about", "admin-about"]) {
 document.getElementById("about-close")!.addEventListener("click", () => aboutDialog.close());
 
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
+
+type ExternalGitRemoteConfig = {
+  url: string; branch: string; direction: "pull" | "push" | "both"; syncMinutes: number;
+  lastCheckedAt: number; lastSyncedAt: number | null; lastStatus: string | null; lastError: string | null;
+};
+
+const externalGitSection = document.getElementById("external-git-settings") as HTMLElement;
+const externalGitUrl = document.getElementById("external-git-url") as HTMLInputElement;
+const externalGitBranch = document.getElementById("external-git-branch") as HTMLInputElement;
+const externalGitDirection = document.getElementById("external-git-direction") as HTMLSelectElement;
+const externalGitInterval = document.getElementById("external-git-interval") as HTMLInputElement;
+const externalGitStatus = document.getElementById("external-git-status") as HTMLElement;
+
+function displayExternalGitRemote(remote: ExternalGitRemoteConfig | null): void {
+  if (!remote) {
+    externalGitUrl.value = ""; externalGitBranch.value = "main"; externalGitDirection.value = "both"; externalGitInterval.value = "0";
+    externalGitStatus.textContent = "No external remote configured.";
+    return;
+  }
+  externalGitUrl.value = remote.url; externalGitBranch.value = remote.branch; externalGitDirection.value = remote.direction; externalGitInterval.value = String(remote.syncMinutes);
+  externalGitStatus.textContent = remote.lastError || (remote.lastStatus ? `Last sync: ${remote.lastStatus}.` : "Saved. Use Sync now to test the connection.");
+}
+
+async function loadExternalGitRemote(): Promise<void> {
+  if (!state.projectCanManage) { externalGitSection.hidden = true; return; }
+  externalGitSection.hidden = false;
+  const { remote } = await request<{ remote: ExternalGitRemoteConfig | null }>("v1/git/remote");
+  displayExternalGitRemote(remote);
+}
 onDynamicClick("project-settings", async () => {
   try {
     const { settings } = await request<{ settings: EditorSettings }>("v1/settings");
@@ -4160,6 +4189,8 @@ onDynamicClick("project-settings", async () => {
     main.value = settings.main;
     (document.getElementById("settings-compiler") as HTMLSelectElement).value = settings.compiler;
     (document.getElementById("settings-auto") as HTMLInputElement).checked = settings.autoCompile;
+    (document.getElementById("settings-scheduled-compile") as HTMLInputElement).value = String(settings.scheduledCompileMinutes);
+    try { await loadExternalGitRemote(); } catch (error) { externalGitStatus.textContent = error.message; }
     settingsDialog.showModal();
   } catch (error) { showToast(error.message); }
 });
@@ -4167,10 +4198,34 @@ document.getElementById("settings-close")!.addEventListener("click", () => setti
 document.getElementById("settings-form")!.addEventListener("submit", async event => {
   event.preventDefault();
   try {
-    const { settings } = await request<{ settings: EditorSettings }>("v1/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ main: (document.getElementById("settings-main") as HTMLSelectElement).value, compiler: (document.getElementById("settings-compiler") as HTMLSelectElement).value, autoCompile: (document.getElementById("settings-auto") as HTMLInputElement).checked }) });
+    const { settings } = await request<{ settings: EditorSettings }>("v1/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ main: (document.getElementById("settings-main") as HTMLSelectElement).value, compiler: (document.getElementById("settings-compiler") as HTMLSelectElement).value, autoCompile: (document.getElementById("settings-auto") as HTMLInputElement).checked, scheduledCompileMinutes: Number((document.getElementById("settings-scheduled-compile") as HTMLInputElement).value) }) });
     state.settings = settings; state.main = settings.main;
     settingsDialog.close(); markPdfStale(); scheduleAutoCompile();
     renderFiles();
+  } catch (error) { showToast(error.message); }
+});
+
+
+document.getElementById("external-git-save")!.addEventListener("click", async () => {
+  if (!externalGitUrl.value.trim()) { showToast("Enter an external Git remote URL first."); return; }
+  try {
+    const { remote } = await request<{ remote: ExternalGitRemoteConfig }>("v1/git/remote", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: externalGitUrl.value, branch: externalGitBranch.value, direction: externalGitDirection.value, syncMinutes: Number(externalGitInterval.value) }),
+    });
+    displayExternalGitRemote(remote); showToast("External Git remote saved.");
+  } catch (error) { showToast(error.message); }
+});
+document.getElementById("external-git-sync")!.addEventListener("click", async () => {
+  try {
+    const { remote, sync } = await request<{ remote: ExternalGitRemoteConfig; sync: { status: string } }>("v1/git/remote/sync", { method: "POST" });
+    displayExternalGitRemote(remote); showToast(`Remote sync: ${sync.status}.`);
+  } catch (error) { showToast(error.message); }
+});
+document.getElementById("external-git-disconnect")!.addEventListener("click", async () => {
+  try {
+    await request("v1/git/remote", { method: "DELETE" });
+    displayExternalGitRemote(null); showToast("External Git remote disconnected.");
   } catch (error) { showToast(error.message); }
 });
 

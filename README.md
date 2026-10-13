@@ -196,10 +196,33 @@ The History view provides paginated checkpoints, per-file diffs, an Agent edits
 filter, and whole-project or single-file restore. A restore creates a new commit
 instead of rewriting history.
 
+## External Git Remote Synchronization
+
+A project owner can configure an HTTPS or SSH remote in **Project Settings**.
+Choose pull-only, push-only, or pull-then-push synchronization, and set an
+optional interval; `0` leaves synchronization manual. **Sync now** checkpoints
+live collaborative content, fetches the configured branch, and merges it into
+live `main` using the same conflict handling as a personal Git push. A conflict
+leaves live `main` unchanged and retains the incoming version on a conflict
+branch for review. Pushes are ordinary non-force pushes, so a remote that
+changes after the fetch is never overwritten.
+
+LaTeX Coder never stores a GitHub token, password, or credential-bearing URL.
+The service uses its own non-interactive Git authentication: use a public
+HTTPS remote, configure a credential helper in the service environment, or
+mount an SSH key and known-hosts file into the container. The remote must be
+reachable from the server, rather than merely from a browser.
+
+For a new empty remote, choose **Pull, then push** and press **Sync now** once;
+LaTeX Coder creates the selected branch from the project’s current `main`.
+
 ## Compilation and Log
 
 Project settings select the main TeX file, compiler, and optional automatic
-compilation. In `auto` mode the server uses `LATEXCODER_LATEX_BIN`, Tectonic, or
+compilation. The editor setting compiles after edits while an editor is open;
+the scheduled interval instead checks projects in the background and compiles
+only when their source has changed. Set that interval to `0` to disable it. In
+`auto` mode the server uses `LATEXCODER_LATEX_BIN`, Tectonic, or
 latexmk. If neither compiler is present, it installs a local verified Tectonic
 binary on first use. Selecting latexmk explicitly requires latexmk to be
 installed already.

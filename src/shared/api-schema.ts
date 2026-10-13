@@ -24,8 +24,16 @@ export const settingsRequestSchema = z.strictObject({
   main: z.string().min(1),
   compiler: z.enum(["auto", "tectonic", "latexmk"]),
   autoCompile: z.boolean(),
+  scheduledCompileMinutes: z.number().int().min(0).max(1440).default(0),
 });
 export const compileRequestSchema = z.strictObject({ main: z.string().optional() });
+export const externalGitDirectionSchema = z.enum(["pull", "push", "both"]);
+export const externalGitRemoteRequestSchema = z.strictObject({
+  url: z.string().trim().min(1).max(2048),
+  branch: z.string().trim().min(1).max(200).default("main"),
+  direction: externalGitDirectionSchema.default("both"),
+  syncMinutes: z.number().int().min(0).max(1440).default(0),
+});
 
 export const currentUserSchema = z.object({
   username: z.string(),
@@ -34,7 +42,7 @@ export const currentUserSchema = z.object({
   userType: userTypeSchema.default("external"),
 });
 export const projectFileSchema = z.object({ path: z.string(), size: z.number(), text: z.boolean() });
-export const editorSettingsSchema = z.object({ main: z.string(), autoCompile: z.boolean(), compiler: z.string() });
+export const editorSettingsSchema = z.object({ main: z.string(), autoCompile: z.boolean(), scheduledCompileMinutes: z.number().int(), compiler: z.string() });
 export const projectSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -56,6 +64,7 @@ export const blameResponseSchema = z.object({ path: z.string(), revision: z.stri
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 export type SettingsRequest = z.infer<typeof settingsRequestSchema>;
+export type ExternalGitRemoteRequest = z.infer<typeof externalGitRemoteRequestSchema>;
 export type CurrentUser = z.infer<typeof currentUserSchema>;
 export type ProjectFile = z.infer<typeof projectFileSchema>;
 export type EditorSettings = z.infer<typeof editorSettingsSchema>;

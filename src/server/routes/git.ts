@@ -1,5 +1,14 @@
 import { apiError } from "../core.ts";
+import { externalGitRemoteRequestSchema } from "../../shared/api-schema.ts";
+import { cleanExternalGitBranch, cleanExternalGitRemoteUrl } from "../external-git.ts";
+import type { ZodType } from "zod";
 import type { GitRouteContext, RouteApp } from "./types.ts";
+
+export function parseGitBody<T>(schema: ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  throw apiError("invalid_request", "request body is invalid", 400, { issues: result.error.issues.map(issue => ({ path: issue.path.join("."), message: issue.message })) });
+}
 
 export function registerGitRoutes(app: RouteApp, context: GitRouteContext): void {
   const { json, raw } = context;
@@ -18,6 +27,43 @@ export function registerGitRoutes(app: RouteApp, context: GitRouteContext): void
         return { ...result, status: await context.gitStatus(runtime) };
       });
       response.json({ git: payload });
+    } catch (error) { next(error); }
+  });
+  app.get("/v1/git/remote", async (request, response, next) => {
+    try {
+      const runtime = await context.resolveProject(request);
+      context.requireProjectOwner(request, runtime);
+      response.json({ remote: context.database.getExternalGitRemote(runtime.id) });
+    } catch (error) { next(error); }
+  });
+  app.put("/v1/git/remote", json({ limit: "16kb" }), async (request, response, next) => {
+    try {
+      const runtime = await context.resolveProject(request);
+      context.requireProjectOwner(request, runtime);
+      const body = parseGitBody(externalGitRemoteRequestSchema, request.body);
+      const remote = context.database.saveExternalGitRemote(runtime.id, {
+        url: cleanExternalGitRemoteUrl(body.url, context.allowFileGitRemote),
+        branch: cleanExternalGitBranch(body.branch),
+        direction: body.direction,
+        syncMinutes: body.syncMinutes,
+      });
+      response.json({ remote });
+    } catch (error) { next(error); }
+  });
+  app.delete("/v1/git/remote", async (request, response, next) => {
+    try {
+      const runtime = await context.resolveProject(request);
+      context.requireProjectOwner(request, runtime);
+      context.database.deleteExternalGitRemote(runtime.id);
+      response.json({ remote: null });
+    } catch (error) { next(error); }
+  });
+  app.post("/v1/git/remote/sync", async (request, response, next) => {
+    try {
+      const runtime = await context.resolveProject(request);
+      context.requireProjectOwner(request, runtime);
+      const sync = await context.syncExternalGitRemote(runtime);
+      response.json({ remote: context.database.getExternalGitRemote(runtime.id), sync });
     } catch (error) { next(error); }
   });
   app.post("/v1/git/sync", json({ limit: "16kb" }), async (request, response, next) => {

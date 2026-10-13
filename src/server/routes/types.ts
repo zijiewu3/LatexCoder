@@ -34,7 +34,10 @@ export interface AdminRouteContext {
 }
 
 export interface GitRouteContext {
+  allowFileGitRemote: boolean;
+  database: StateDatabase;
   gitCheckpoint(runtime: ProjectRuntime, message: unknown): Promise<{ commit: string; created: boolean }>;
+  syncExternalGitRemote(runtime: ProjectRuntime): Promise<{ status: string; pull: Record<string, unknown> | null; pushed: boolean }>;
   gitReceivePack(runtime: ProjectRuntime, args: string[], input: Uint8Array, protocol?: string, actor?: BlameActor): Promise<{ output: Buffer; sync: { status?: string } | null }>;
   gitResolve(runtime: ProjectRuntime, message: unknown): Promise<Record<string, unknown>>;
   gitStatus(runtime: ProjectRuntime): Promise<Record<string, unknown>>;
@@ -47,6 +50,7 @@ export interface GitRouteContext {
   resolveGitProject(request: Request): Promise<ProjectRuntime>;
   resolveGitPushProject(request: Request): Promise<{ runtime: ProjectRuntime; actor: BlameActor }>;
   resolveProject(request: Request): Promise<ProjectRuntime>;
+  requireProjectOwner(request: Request, runtime: ProjectRuntime): void;
   withGitOperation<T>(runtime: ProjectRuntime, task: () => Promise<T>): Promise<T>;
   withGitReader<T>(runtime: ProjectRuntime, task: () => Promise<T>): Promise<T>;
   withLiveGitOperation<T>(runtime: ProjectRuntime, task: () => Promise<T>): Promise<T>;
